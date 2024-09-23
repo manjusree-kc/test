@@ -1,61 +1,78 @@
-from django.shortcuts import render
-from rest_framework.response import Response
-from rest_framework.decorators import api_view
-from .models import RegulationsList, RegulationsDetails
-from .serializers import RegulationsListSerializer
 from django.http import JsonResponse
-
-from django.http import JsonResponse
-from .models import *
+from .models import NotificationData
 from django.core.serializers import serialize
-from django.db.models import Count
 from django.db.models import Count, Q
 from datetime import datetime, timedelta
-import json
+from django.utils import timezone
+from rest_framework.decorators import api_view
 
-def regulations_list(request):
+
+@api_view(['GET'])
+def statistics_view(request):
     try:
-        queryset = RegulationsList.objects.all()
-        data = serialize('json', queryset)
-        
-        data = json.loads(data)
-        
-        formatted_data = []
-        for item in data:
-            obj = item['fields']
-            obj['not_id'] = item['pk']  # Include primary key if needed
-            formatted_data.append(obj)
+        total_regulators = NotificationData.objects.values('regulatory_body').distinct().count()
+        total_notifications = NotificationData.objects.count()
+        high_impact_count = NotificationData.objects.filter(impact_label='High').count()
+        action_required = NotificationData.objects.filter(action_status=False).count()
 
-        # Return as JSON response
-        return JsonResponse({'status': True, 'message': 'success', 'data': formatted_data})
+        data = {
+            "total_regulators": total_regulators,
+            "total_notifications": total_notifications,
+            "high_impact_count": high_impact_count,
+            "action_required": action_required,
+        }
+        return JsonResponse({'status': True, 'message': 'success', 'title': 'Quarterly Notification Data','data': data})
+    
     except:
         return JsonResponse({'status': False, 'message': 'failed'}, status=404)
 
+@api_view(['GET'])
+def get_table_data(request):
+    try:
+        required_columns = ["not_id", "subpart", "regulatory_body",
+                            "timestamp", "chapter_no", "part_name",
+                            "impact_label", "impact_value", "action_status"]
+        queryset = NotificationData.objects.values(*required_columns)
+        data = list(queryset)
 
+        return JsonResponse({'status': True, 'message': 'success', 'data': data})
+    except Exception as e:
+        return JsonResponse({'status': False, 'message': str(e)}, status=500)
+
+@api_view(['GET'])
 def get_regulation_details(request, not_id):
     try:
-        # Query the model for the record with the specified not_id
-        obj = RegulationsDetails.objects.get(not_id=not_id)
+        data_obj = NotificationData.objects.get(not_id=not_id)
         
         data = {
-            "not_id": obj.not_id,
-            "chapter_no": obj.chapter_no,
-            "notification_doc_url": obj.notification_doc_url,
-            "notification_doc_with_highlight_url": obj.notification_doc_with_highlight_url,
-            "highlighted_pages": obj.highlighted_pages,
-            "notification_summary": obj.notification_summary,
-            "insights": obj.insights
+            "not_id": not_id,
+            "chapter_name": data_obj.chapter_name,
+            "part_name": data_obj.part_name,
+            "subpart": data_obj.subpart,
+            "regulatory_body": data_obj.regulatory_body,
+            "timestamp": data_obj.timestamp,
+            "impact_label": data_obj.impact_label,
+            "impact_value": data_obj.impact_value,
+            "action_status": data_obj.action_status,
+            "action_taken_timestamp": data_obj.action_taken_timestamp,
+            "notification_doc_url": data_obj.notification_doc_url,
+            "notification_doc_with_highlight_url": data_obj.notification_doc_with_highlight_url,
+            "highlighted_pages": data_obj.highlighted_pages,
+            "notification_summary": data_obj.notification_summary,
+            "insights": data_obj.insights
         }
 
         return JsonResponse({'status': True, 'message': 'success', 'data': data}, status=200)
-    except RegulationsDetails.DoesNotExist:
-        return JsonResponse({'status': False, 'message': 'failed'}, status=404)
-    
+    except NotificationData.DoesNotExist:
+        return JsonResponse({'status': False, 'message': 'Regulation not found'}, status=404)
+    except Exception as e:
+        return JsonResponse({'status': False, 'message': str(e)}, status=500)
 
+@api_view(['GET'])
 def get_impact_level_pie_data(request):
     try:
-        impact_counts = RegulationsList.objects.values('impact_label').annotate(count=Count('impact_label'))
-        total_count = RegulationsList.objects.count()
+        impact_counts = NotificationData.objects.values('impact_label').annotate(count=Count('impact_label'))
+        total_count = NotificationData.objects.count()
 
         pie_data = []
 
@@ -70,13 +87,13 @@ def get_impact_level_pie_data(request):
             print(pie_data)
 
         return JsonResponse({'status': True, 'message': 'success', 'title': 'Impact Level','data': pie_data})
-    except:
-        return JsonResponse({'status': False, 'message': 'failed'}, status=404)
+    except Exception as e:
+        return JsonResponse({'status': False, 'message': str(e)}, status=500)
 
-
+@api_view(['GET'])
 def get_notifications_count_per_body(request):
     try:
-        body_counts = RegulationsList.objects.values('regulatory_body').annotate(count=Count('regulatory_body'))
+        body_counts = NotificationData.objects.values('regulatory_body').annotate(count=Count('regulatory_body'))
         bar_data = []
 
         for body in body_counts:
@@ -88,9 +105,10 @@ def get_notifications_count_per_body(request):
             })
 
         return JsonResponse({'status': True, 'message': 'success', 'title': 'Notifications Per Regulatory Body','data': bar_data})
-    except:
-        return JsonResponse({'status': False, 'message': 'failed'}, status=404)
+    except Exception as e:
+        return JsonResponse({'status': False, 'message': str(e)}, status=500)
 
+@api_view(['GET'])
 def get_quarterly_data(request):
     try:
         now = datetime.now()
@@ -116,12 +134,12 @@ def get_quarterly_data(request):
 
         for year, quarter in reversed(quarters):
             start_date, end_date = get_quarter_dates(year, quarter)
-            total_count = RegulationsList.objects.filter(timestamp__range=[start_date, end_date]).count()
-            action_taken_count = RegulationsList.objects.filter(
+            total_count = NotificationData.objects.filter(timestamp__range=[start_date, end_date]).count()
+            action_taken_count = NotificationData.objects.filter(
                 timestamp__range=[start_date, end_date],
                 action_status=True
             ).count()
-            no_action_count = RegulationsList.objects.filter(
+            no_action_count = NotificationData.objects.filter(
                 timestamp__range=[start_date, end_date],
                 action_status=False
             ).count()
@@ -134,32 +152,42 @@ def get_quarterly_data(request):
             })
 
         return JsonResponse({'status': True, 'message': 'success', 'title': 'Quarterly Notification Data','data': data})
-    except:
-        return JsonResponse({'status': False, 'message': 'failed'}, status=404)
-
-
+    except Exception as e:
+        return JsonResponse({'status': False, 'message': str(e)}, status=500)
 
 @api_view(['GET'])
-def statistics_view(request):
+def calculate_response_time_intervals(request):
     try:
-        total_regulators = RegulationsList.objects.values('regulatory_body').distinct().count()
-        total_notifications = RegulationsList.objects.count()
-        high_impact_count = RegulationsList.objects.filter(impact_label='high').count()
-        action_required = RegulationsList.objects.filter(action_status=False).count()
+        now = timezone.now()
 
-        data = {
-            "total_regulators": total_regulators,
-            "total_notifications": total_notifications,
-            "high_impact_count": high_impact_count,
-            "action_required": action_required,
+        intervals = {
+            "0-1 days": 0,
+            "1-2 days": 0,
+            "2-5 days": 0,
+            "5-10 days": 0,
+            "10+ days": 0
         }
-        return JsonResponse({'status': True, 'message': 'success', 'title': 'Quarterly Notification Data','data': data})
+
+        # Fetch all notifications
+        notifications = NotificationData.objects.all()
+
+        for notification in notifications:
+            if notification.action_taken_timestamp:
+                response_time = (notification.action_taken_timestamp - notification.timestamp).days
+                
+                # Categorize response times into intervals
+                if response_time <= 1:
+                    intervals["0-1 days"] += 1
+                elif response_time <= 2:
+                    intervals["1-2 days"] += 1
+                elif response_time <= 5:
+                    intervals["2-5 days"] += 1
+                elif response_time <= 10:
+                    intervals["5-10 days"] += 1
+                else:
+                    intervals["10+ days"] += 1
+
+        return JsonResponse({'status': True, 'message': 'success', 'title': 'Response Time Summary', 'data': intervals})
     
-    except:
-        return JsonResponse({'status': False, 'message': 'failed'}, status=404)
-
-  
-
-
-
-
+    except Exception as e:
+        return JsonResponse({'status': False, 'message': str(e)}, status=500)
